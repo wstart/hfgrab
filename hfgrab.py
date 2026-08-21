@@ -153,6 +153,11 @@ def run_aria(listing: Path, dest: Path, threads: int, jobs: int) -> subprocess.P
         "--max-tries=5", "--retry-wait=3",
         "--connect-timeout=20", "--timeout=60",
         "--lowest-speed-limit=1K",
+        # aria2c 默认用自带的异步 DNS（c-ares），绕过系统解析器。代理开
+        # fake-IP 模式时域名被映射到 198.18.0.0/15 的假地址，c-ares 拿不到
+        # 这个映射，于是所有文件都以退出码 19（域名解析失败）告终——而同
+        # 一时刻 curl 却能正常下载。交回系统解析器就好了。
+        "--async-dns=false",
     ]
     log = open(dest / ".hfgrab.log", "ab")
     return subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL)
