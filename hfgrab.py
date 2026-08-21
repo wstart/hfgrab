@@ -104,11 +104,18 @@ def human(n: float) -> str:
 
 
 def dir_size(p: Path) -> int:
+    """已真实落盘的字节数。
+
+    必须数实占块（st_blocks）而不是表观大小（st_size）：多连接下载会往
+    文件的各个偏移并发写入，文件立刻变成稀疏文件——st_size 早早跳到接近
+    满值然后不再增长，而进度和卡住检测都依赖这个数，结果就是把一个正常
+    传输中的下载误判成「无进展」并掐掉重启。st_blocks 只算真正写下去的。
+    """
     total = 0
     for f in p.rglob("*"):
         try:
             if f.is_file():
-                total += f.stat().st_size
+                total += f.stat().st_blocks * 512
         except OSError:
             pass
     return total
@@ -218,7 +225,7 @@ def download(repo: str, dest_root: Path, *, threads: int, jobs: int,
                 if sys.stdout.isatty():
                     sys.stdout.write("\r" + line + "      ")
                     sys.stdout.flush()
-                elif now - last_print[0] > 30:   # 非终端时每 30 秒打一行，不刷屏
+                elif now - last_print[0] > 5:    # 非终端时每 5 秒打一行：界面要靠它显示明细
                     print(line, flush=True)
                     last_print[0] = now
             elif now - stalled_since > stall_limit:
