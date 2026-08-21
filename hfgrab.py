@@ -204,6 +204,24 @@ def download(repo: str, dest_root: Path, *, threads: int, jobs: int,
 
     name = repo.split("/")[-1] + (f"-{subdir.strip('/').replace('/', '-')}" if subdir else "")
     dest = dest_root / name
+
+    # 目标目录里已经有一份完整模型、而远端文件大小对不上时，说明那是**另一个
+    # 来源**的同名模型（例如本地 mlx_lm.convert 量化出来的，分片布局与 HF 仓库
+    # 不同）。此时按大小不符去「续传」，等于拿远端数据往本地分片上覆盖，
+    # 结果是两边都不成立——一个能用的模型就这么没了。宁可停下来让人决定。
+    if dest.is_dir() and (dest / "config.json").exists() \
+            and not list(dest.glob("*.aria2")):          # 有 .aria2 说明是我们自己下了一半
+        local = {f.name: f.stat().st_size for f in dest.iterdir() if f.is_file()}
+        conflict = [f["local"] if "local" in f else f["path"]
+                    for f in info["files"]
+                    if Path(f.get("local", f["path"])).name in local
+                    and local[Path(f.get("local", f["path"])).name] != f["size"]]
+        if conflict and any(c.endswith(".safetensors") for c in conflict):
+            die(f"{dest} 里已有一份完整模型，但 {len(conflict)} 个文件与远端大小不符，"
+                f"多半来自别的构建（如本地量化）。继续下载会覆盖它。\n"
+                f"    要替换请先删除该目录，要并存请用 -o 指定别的位置。")
+            return 1
+
     dest.mkdir(parents=True, exist_ok=True)
 
     free = shutil.disk_usage(dest).free
