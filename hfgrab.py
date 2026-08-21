@@ -143,6 +143,11 @@ def run_aria(listing: Path, dest: Path, threads: int, jobs: int) -> subprocess.P
         "--split=8", "--min-split-size=20M",
         "--continue=true", "--auto-file-renaming=false",
         "--allow-overwrite=true",
+        # 关键：默认的预分配会让文件一开始就占满磁盘空间，而进度和卡住检测
+        # 都是靠 du 数实占块算的 —— 大文件一启动 du 就跳到满值再也不动，
+        # 于是健康的下载会被误判成「无进展」而反复重启，最终放弃。
+        # none 让文件按写入稀疏增长，du 才反映真实下载量。
+        "--file-allocation=none",
         "--console-log-level=warn", "--summary-interval=0",
         # 连接层面的自愈；卡死检测在外层按体积增长兜底
         "--max-tries=5", "--retry-wait=3",
