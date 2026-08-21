@@ -128,7 +128,10 @@ def build_aria_input(repo: str, files: list[dict], dest: Path,
     lines: list[str] = []
     for f in files:
         rel = f["path"]
-        out = dest / rel
+        # local 是剥掉子目录前缀后的落盘路径：仓库把多个量化版本放在
+        # 8-bit/ 4-bit/ 这样的子目录里，只取其一时要摊平成标准模型目录，
+        # 否则 mlx 找不到 config.json。
+        out = dest / f.get("local", rel)
         if out.exists() and f["size"] and out.stat().st_size == f["size"]:
             continue                                   # 已完整，跳过
         url = f"{MIRROR}/{kind}{repo}/resolve/{revision}/{urllib.parse.quote(rel)}"
@@ -172,7 +175,7 @@ def run_aria(listing: Path, dest: Path, threads: int, jobs: int) -> subprocess.P
 
 def download(repo: str, dest_root: Path, *, threads: int, jobs: int,
              is_dataset: bool, token: str | None, stall_limit: int,
-             max_restarts: int) -> int:
+             max_restarts: int, subdir: str = "") -> int:
     say(f"查询 {repo}")
     try:
         info = repo_info(repo, is_dataset)
@@ -182,10 +185,25 @@ def download(repo: str, dest_root: Path, *, threads: int, jobs: int,
 
     if not info["files"]:
         die("仓库里没有文件")
-    ok(f"{len(info['files'])} 个文件，共 {human(info['total'])}"
-       + (f"，下载量 {info['downloads']:,}" if info["downloads"] else ""))
 
-    dest = dest_root / repo.split("/")[-1]
+    if subdir:
+        pre = subdir.strip("/") + "/"
+        sel = [f for f in info["files"] if f["path"].startswith(pre)]
+        if not sel:
+            tops = sorted({f["path"].split("/")[0] for f in info["files"] if "/" in f["path"]})
+            die(f"仓库里没有 {pre} 目录" + (f"，可选：{', '.join(tops)}" if tops else ""))
+            return 1
+        for f in sel:
+            f["local"] = f["path"][len(pre):]
+        info["files"] = sel
+        info["total"] = sum(f["size"] for f in sel)
+
+    ok(f"{len(info['files'])} 个文件，共 {human(info['total'])}"
+       + (f"，下载量 {info['downloads']:,}" if info["downloads"] else "")
+       + (f"（仅 {subdir}/）" if subdir else ""))
+
+    name = repo.split("/")[-1] + (f"-{subdir.strip('/').replace('/', '-')}" if subdir else "")
+    dest = dest_root / name
     dest.mkdir(parents=True, exist_ok=True)
 
     free = shutil.disk_usage(dest).free
@@ -284,6 +302,8 @@ def main() -> int:
     ap.add_argument("-x", "--threads", type=int, default=8, help="每服务器连接数（默认 8）")
     ap.add_argument("-j", "--jobs", type=int, default=5, help="并发文件数（默认 5）")
     ap.add_argument("--dataset", action="store_true", help="下载数据集而非模型")
+    ap.add_argument("--subdir", default="",
+                    help="只下仓库里的某个子目录（如 8-bit），落盘时摊平成标准模型目录")
     ap.add_argument("--token", default=os.environ.get("HF_TOKEN"),
                     help="HF token（私有仓库或提速，也可用 $HF_TOKEN）")
     ap.add_argument("--stall", type=int, default=120,
@@ -303,7 +323,7 @@ def main() -> int:
     try:
         return download(repo, Path(a.output).expanduser().resolve(),
                         threads=a.threads, jobs=a.jobs, is_dataset=a.dataset,
-                        token=a.token, stall_limit=a.stall,
+                        token=a.token, stall_limit=a.stall, subdir=a.subdir,
                         max_restarts=a.max_restarts)
     except KeyboardInterrupt:
         print()
